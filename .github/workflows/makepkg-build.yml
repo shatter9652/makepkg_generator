@@ -19,62 +19,56 @@ jobs:
       image: archlinux:latest
 
     steps:
-      - name: Install build dependencies
+      - name: System setup
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm \
-            base-devel \
-            git \
-            sudo \
-            github-cli
+          pacman -S --noconfirm base-devel git sudo github-cli
 
-      - name: Create builder user
+      - name: Create builder user + workspace
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          mkdir -p /home/builder/build
+          chown -R builder:builder /home/builder
 
       - name: Clone AUR package
         run: |
-          su builder -c "
+          runuser -u builder -- bash -lc "
+            cd /home/builder/build &&
             git clone https://aur.archlinux.org/${{ inputs.package }}.git
           "
 
       - name: Build package
         run: |
-          su builder -c "
-            cd ${{ inputs.package }}
-            makepkg -s --noconfirm
+          runuser -u builder -- bash -lc "
+            cd /home/builder/build/${{ inputs.package }} &&
+            makepkg -s --noconfirm --noprogressbar
           "
 
-      - name: Collect packages
+      - name: Collect .zst packages
         run: |
-          mkdir /packages
-          find /home/builder/${{ inputs.package }} \
-            -type f \
-            \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \) \
-            -exec cp {} /packages/ \;
+          mkdir -p /packages
+          cp /home/builder/build/${{ inputs.package }}/*.pkg.tar.zst /packages/ || true
 
-      - name: Upload artifacts
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.package }}
           path: /packages/*
 
-      - name: Create Release
+      - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ inputs.package }}"
+
           gh release delete "$TAG" -y || true
           gh release create "$TAG" \
-            --title "${{ inputs.package }}" \
-            --notes "Automated build of ${{ inputs.package }}"
+            --title "$TAG" \
+            --notes "Automated AUR build for $TAG"
 
-      - name: Upload Release Assets
+      - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload \
-            "${{ inputs.package }}" \
-            /packages/* \
-            --clobber
+          gh release upload "${{ inputs.package }}" /packages/* --clobber
