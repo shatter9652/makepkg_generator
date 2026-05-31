@@ -1,4 +1,4 @@
-name: Build AUR Package
+name: Build AUR Package vv2
 
 on:
   workflow_dispatch:
