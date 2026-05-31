@@ -1,0 +1,66 @@
+name: Build AUR Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "AUR package name"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: System setup
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git sudo gnupg
+
+      - name: Create build user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          mkdir -p /repo/pkgs
+          chown -R builder:builder /repo
+
+      - name: Build AUR package
+        run: |
+          runuser -u builder -- bash -lc "
+            mkdir -p ~/build &&
+            cd ~/build &&
+            git clone https://aur.archlinux.org/${{ inputs.package }}.git &&
+            cd ${{ inputs.package }} &&
+            makepkg -s --noconfirm
+          "
+
+      - name: Normalize package output (Chaotic-style)
+        run: |
+          mkdir -p /repo/pkgs
+
+          for f in /home/builder/build/${{ inputs.package }}/*.pkg.tar.zst; do
+            [ -e "$f" ] || continue
+
+            base=$(basename "$f")
+
+            # Strip epoch (anything before :)
+            base=$(echo "$base" | sed 's/^[^:]*://')
+
+            # Sanitize for all FS + repo-add safety
+            base=$(echo "$base" | tr ':' '-' | tr ' ' '-')
+
+            cp "$f" "/repo/pkgs/$base"
+          done
+
+      - name: Upload repo-ready artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-pkgs
+          path: /repo/pkgs/*
