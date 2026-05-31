@@ -1,0 +1,64 @@
+name: Build AUR Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install deps
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git
+
+      - name: Create user
+        run: |
+          useradd -m builder
+          mkdir -p /home/builder/build
+          chown -R builder:builder /home/builder
+
+      - name: Build package
+        run: |
+          runuser -u builder -- bash -lc "
+            cd /home/builder/build &&
+            git clone https://aur.archlinux.org/${{ inputs.package }}.git &&
+            cd ${{ inputs.package }} &&
+            makepkg -s --noconfirm
+          "
+
+      - name: Normalize output (Chaotic-style)
+        run: |
+          mkdir -p /out
+
+          for f in /home/builder/build/*/*.pkg.tar.zst; do
+            [ -e "$f" ] || continue
+
+            base=$(basename "$f")
+            base=$(echo "$base" | sed 's/^[^:]*://')
+            base=$(echo "$base" | tr ':' '-' | tr ' ' '-')
+
+            cp "$f" "/out/$base"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg
+          path: /out/*
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.package }}" /out/* --clobber
